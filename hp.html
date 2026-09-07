@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Expiry & Markdown Manager</title>
+<style>
+  :root { --border:#d9dde3; --text:#1f2937; --muted:#6b7280; --bg:#f5f7fa; --card:#fff; --accent:#2563eb; --danger:#dc2626; --orange:#d97706; --green:#15803d; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Arial,Helvetica,sans-serif; color:var(--text); background:var(--bg); }
+  header { background:#1f2937; color:#fff; padding:18px 24px; }
+  header h1 { margin:0 0 4px; font-size:24px; }
+  header p { margin:0; color:#d1d5db; font-size:14px; }
+  nav { display:flex; gap:8px; flex-wrap:wrap; padding:12px 24px; background:#fff; border-bottom:1px solid var(--border); }
+  nav button { border:1px solid var(--border); background:#fff; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600; }
+  nav button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  main { max-width:1400px; margin:0 auto; padding:20px; }
+  .tab { display:none; }
+  .tab.active { display:block; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin-bottom:20px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .cardButton { width:100%; text-align:left; cursor:pointer; transition:transform .08s, box-shadow .08s; font:inherit; color:inherit; }
+  .cardButton:hover { box-shadow:0 3px 12px rgba(0,0,0,.08); transform:translateY(-1px); }
+  .card .number { font-size:30px; font-weight:800; margin-top:5px; }
+  .red { color:var(--danger); } .orange { color:var(--orange); } .green { color:var(--green); } .muted { color:var(--muted); }
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; }
+  .panel h2 { margin:0 0 6px; font-size:19px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+  label { display:block; font-weight:700; font-size:13px; margin-bottom:5px; }
+  input, select { width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:7px; font-size:15px; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  button.primary, button.action { border:0; background:var(--accent); color:#fff; padding:10px 14px; border-radius:7px; cursor:pointer; font-weight:700; }
+  button.secondary { border:1px solid var(--border); background:#fff; padding:10px 14px; border-radius:7px; cursor:pointer; font-weight:700; }
+  button.danger { border:0; background:var(--danger); color:#fff; padding:8px 11px; border-radius:6px; cursor:pointer; font-weight:700; }
+  button.small { padding:7px 9px; font-size:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { border-bottom:1px solid #e5e7eb; padding:10px 8px; text-align:left; vertical-align:middle; font-size:13px; }
+  th { background:#f8fafc; position:sticky; top:0; z-index:1; }
+  .table-wrap { overflow:auto; max-height:560px; }
+  .badge { display:inline-block; padding:4px 7px; border-radius:999px; font-size:11px; font-weight:800; }
+  .badge.red { background:#fee2e2; color:#991b1b; } .badge.orange { background:#ffedd5; color:#9a3412; }
+  .badge.green { background:#dcfce7; color:#166534; } .badge.gray { background:#e5e7eb; color:#374151; }
+  .notice { padding:12px; border-radius:8px; background:#eff6ff; border:1px solid #bfdbfe; margin-bottom:14px; font-size:13px; }
+  .warn { padding:12px; border-radius:8px; background:#fffbeb; border:1px solid #fde68a; margin-bottom:14px; font-size:13px; }
+  .empty { padding:25px; text-align:center; color:var(--muted); }
+  .statusCheck { width:22px; height:22px; cursor:pointer; }
+  td.checkCell { text-align:center; }
+  .print-only { display:none; }
+  .fileRow { display:flex; gap:8px; align-items:center; }
+  @media print {
+    nav, header, .no-print, .actions, .panel.form-panel { display:none !important; }
+    body { background:#fff; }
+    main { padding:0; max-width:none; }
+    .print-only { display:block; }
+    table { font-size:11px; }
+    th,td { padding:6px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Expiry & Markdown</h1>
+  <p>Input expiry once, then let the system build the daily pull and markdown lists.</p>
+</header>
+
+<nav>
+  <button class="tabBtn active" data-tab="dashboard">Dashboard</button>
+  <button class="tabBtn" data-tab="receive">Receive Products</button>
+  <button class="tabBtn" data-tab="expiryList">Expiry List</button>
+  <button class="tabBtn" data-tab="markdownList">Markdown List</button>
+  <button class="tabBtn" data-tab="audit">Supervisor Audit</button>
+  <button class="tabBtn" data-tab="inventory">All Items</button>
+</nav>
+
+<main>
+<section id="dashboard" class="tab active">
+  <div class="panel">
+    <div class="grid">
+      <div>
+        <label for="workDate">Working date</label>
+        <input type="date" id="workDate">
+      </div>
+      <div style="align-self:end">
+        <button class="primary" onclick="refreshAll()">Refresh Lists</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="cards">
+    <button class="card cardButton" onclick="openDashboardList('pull')"><div class="muted">🔴 Items Expiring Today</div><div class="number red" id="countPull">0</div></button>
+    <button class="card cardButton" onclick="openDashboardList('markdown')"><div class="muted">🟠 Markdowns due today</div><div class="number orange" id="countMarkdown">0</div></button>
+  </div>
+
+  <div id="auditBanner"></div>
+</section>
+
+<section id="receive" class="tab">
+  <div class="panel form-panel">
+    <h2>📦 Receive a Product Batch</h2>
+    <div class="notice" id="gs1Notice" style="display:none;"></div>
+    <form id="receiveForm">
+      <div class="grid">
+        <div>
+          <label>A Code</label>
+          <input id="variant" required autofocus placeholder="Type the A Code">
+        </div>
+        <div>
+          <label>Barcode</label>
+          <input id="barcode" placeholder="Scan barcode here (optional)">
+        </div>
+        <div>
+          <label>Brand</label>
+          <input id="brand" required placeholder="e.g. McR">
+        </div>
+        <div>
+          <label>Description</label>
+          <input id="description" required placeholder="e.g. Heavy Cream 40%">
+        </div>
+        <div>
+          <label>Expiry date</label>
+          <input id="expiry" type="date" required>
+        </div>
+        <div>
+          <label>Quantity</label>
+          <input id="quantity" type="number" min="1" required value="1">
+        </div>
+        <div>
+          <label>Department</label>
+          <select id="department"></select>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" type="submit" id="saveBtn">Save Batch</button>
+        <button class="secondary" type="button" onclick="clearReceive()">Clear</button>
+        <button class="secondary" type="button" id="cancelEditBtn" style="display:none;" onclick="cancelEdit()">Cancel Edit</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>Recently Received Today</h2>
+    <p class="muted">Made a mistake? Edit or delete a batch here before it hits the shelf.</p>
+    <div id="recentReceivedTable"></div>
+  </div>
+
+  <div class="panel">
+    <h2>How receiving works</h2>
+    <ol>
+      <li>Type in the A Code.</li>
+      <li>Enter brand name and description.</li>
+      <li>Enter the expiry date and quantity.</li>
+      <li>Save the batch.</li>
+      <li>If the same A Code arrives with a different expiry, save it again as a new batch.</li>
+    </ol>
+  </div>
+</section>
+
+<section id="expiryList" class="tab">
+  <div class="panel no-print">
+    <div class="grid">
+      <div>
+        <label>List date</label>
+        <input type="date" id="expiryListDate" onchange="renderExpiryList()">
+      </div>
+    </div>
+    <div class="actions">
+      <button class="secondary" onclick="printExpiryList()">Print Expiry List</button>
+    </div>
+  </div>
+
+  <div class="print-only">
+    <h1>Product Expiry Report</h1>
+    <p id="expiryPrintDate"></p>
+  </div>
+  <div class="panel">
+    <h2>🔴 Pull From Floor</h2>
+    <div id="expiryListTable"></div>
+  </div>
+</section>
+
+<section id="markdownList" class="tab">
+  <div class="panel no-print">
+    <div class="grid">
+      <div>
+        <label>List date</label>
+        <input type="date" id="markdownListDate" onchange="renderMarkdownList()">
+      </div>
+    </div>
+    <div class="actions">
+      <button class="secondary" onclick="printMarkdownList()">Print Markdown List</button>
+    </div>
+  </div>
+
+  <div class="print-only">
+    <h1>Product Markdown Report</h1>
+    <p id="markdownPrintDate"></p>
+  </div>
+  <div class="panel">
+    <h2>🟠 30% Markdown Today</h2>
+    <div id="markdownListTable"></div>
+  </div>
+</section>
+
+<section id="audit" class="tab">
+  <div class="panel">
+    <h2>Supervisor Audit</h2>
+    <p><strong>What to do:</strong> Check if anything marked "Pulled" is actually off the floor and anything marked "Marked Down" is actually discounted, and correct any mismatches.</p>
+    <div id="auditStatus"></div>
+  </div>
+  <div class="panel">
+    <h2>Recent Pull/Markdown Activity</h2>
+    <div id="auditTable"></div>
+  </div>
+</section>
+
+<section id="inventory" class="tab">
+  <div class="panel">
+    <div class="grid">
+      <div>
+        <label>Search</label>
+        <input id="search" oninput="renderInventory()" placeholder="Barcode, brand, description...">
+      </div>
+      <div>
+        <label>Show</label>
+        <select id="statusFilter" onchange="renderInventory()">
+          <option value="all" selected>All items</option>
+          <option value="active">Not pulled yet</option>
+          <option value="marked">Marked down</option>
+          <option value="unmarked">Not marked down</option>
+          <option value="pulled">Pulled</option>
+        </select>
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>All Items</h2>
+    <p class="muted">Check the box under <strong>Mk Dwn</strong> once an item is marked down 30%, and check <strong>Pulled</strong> once it's off the floor. Uncheck either one if you checked it by mistake. Quantity can be typed in directly.</p>
+    <div id="inventoryTable"></div>
+  </div>
+</section>
+</main>
+
+<script>
+const STORAGE_KEY = 'expiryManagerBatchesV2';
+let batches = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let editingId = null;
+
+// Departments that the 30%-at-3-days-out markdown rule applies to,
+// per the store's "Bi-Daily (3 Days-Out) Markdown Schedule" sheet.
+const DEPARTMENTS = ['Dairy','Butcher Shoppe Meat','Salads','Cheese','Eggs','Kefir','Bakery','Deli','Produce','Frozen','Grocery','Other'];
+const MARKDOWN_DEPARTMENTS = new Set(['Dairy','Butcher Shoppe Meat','Salads','Cheese','Eggs','Kefir']);
+
+function localDateString(d=new Date()) {
+  const x = new Date(d);
+  const y=x.getFullYear(), m=String(x.getMonth()+1).padStart(2,'0'), day=String(x.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function parseDate(s) { const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); }
+function addDays(dateStr, n) { return localDateString(new Date(parseDate(dateStr).getTime() + n*86400000)); }
+function diffDays(a,b) { return Math.round((parseDate(b)-parseDate(a))/86400000); }
+function formatDate(s) {
+  if (!s) return '';
+  return parseDate(s).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+}
+function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(batches)); }
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+}
+function getDate(id) { return document.getElementById(id).value || localDateString(); }
+
+document.getElementById('department').innerHTML = DEPARTMENTS.map(d=>`<option>${esc(d)}</option>`).join('');
+
+function rowTable(items) {
+  if (!items.length) return '<div class="empty">Nothing to show.</div>';
+  return `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>A Code</th><th>Brand</th><th>Description</th><th>Dept</th><th>Expiry</th><th>Qty</th><th>Mk Dwn ✓</th><th>Pulled ✓</th>
+    </tr></thead><tbody>
+    ${items.map(b => `<tr>
+      <td>${esc(b.variant || b.barcode)}</td>
+      <td>${esc(b.brand)}</td>
+      <td>${esc(b.description)}${b.barcode ? `<br><span class="muted">${esc(b.barcode)}</span>` : ''}</td>
+      <td>${esc(b.department)}${MARKDOWN_DEPARTMENTS.has(b.department) ? '' : '<br><span class="muted">not markdown-eligible</span>'}</td>
+      <td>${formatDate(b.expiry)}</td>
+      <td><input type="number" min="0" class="qtyInput" value="${b.quantity}" onchange="setQuantity('${b.id}', this.value)" style="width:64px;padding:6px;"></td>
+      <td class="checkCell">
+        <input type="checkbox" class="statusCheck" ${b.markedDown ? 'checked' : ''} onchange="setMarkdown('${b.id}', this.checked)" title="Checked = marked down 30%">
+      </td>
+      <td class="checkCell">
+        <input type="checkbox" class="statusCheck" ${b.pulled ? 'checked' : ''} onchange="setPulled('${b.id}', this.checked)" title="Checked = pulled from floor">
+      </td>
+    </tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+function activeBatches() { return batches.filter(b => !b.pulled && b.quantity > 0); }
+
+// Pull: anything due today OR overdue (missed yesterday) that hasn't been pulled yet.
+function getPullItems(date) {
+  return batches.filter(b => !b.pulled && b.quantity > 0 && b.expiry <= date)
+    .sort((a,b)=>a.expiry.localeCompare(b.expiry));
+}
+
+// Markdown: eligible departments, within 3 days of expiry, not yet marked down, not yet pulled.
+// Includes 1-2 days out as a catch-up net for anything missed on its scheduled day.
+function getMarkdownItems(date) {
+  return batches.filter(b =>
+    !b.markedDown && !b.pulled && b.quantity > 0 &&
+    MARKDOWN_DEPARTMENTS.has(b.department) &&
+    diffDays(date, b.expiry) >= 1 && diffDays(date, b.expiry) <= 3
+  ).sort((a,b)=>a.expiry.localeCompare(b.expiry));
+}
+
+function renderSmall(items) {
+  if (!items.length) return '<div class="empty">No items.</div>';
+  return rowTable(items);
+}
+
+function refreshAll() {
+  const date=getDate('workDate');
+  document.getElementById('expiryListDate').value=date;
+  document.getElementById('markdownListDate').value=date;
+  renderDashboard();
+  renderExpiryList();
+  renderMarkdownList();
+  renderInventory();
+  renderAudit();
+  renderRecentReceived();
+}
+
+function renderDashboard() {
+  const date=getDate('workDate');
+  const pull=getPullItems(date), md=getMarkdownItems(date);
+  document.getElementById('countPull').textContent=pull.length;
+  document.getElementById('countMarkdown').textContent=md.length;
+
+  const weekday = parseDate(date).getDay();
+  const banner = document.getElementById('auditBanner');
+  if (weekday === 2 || weekday === 6) {
+    banner.innerHTML = `<div class="warn">📋 Today is a scheduled <strong>supervisor audit day</strong>. Check the Supervisor Audit tab against the pulls/markdowns above.</div>`;
+  } else {
+    banner.innerHTML = '';
+  }
+}
+
+function renderExpiryList() {
+  const date=getDate('expiryListDate');
+  document.getElementById('expiryPrintDate').textContent='Report date: '+formatDate(date);
+  document.getElementById('expiryListTable').innerHTML=renderSmall(getPullItems(date));
+}
+
+function renderMarkdownList() {
+  const date=getDate('markdownListDate');
+  document.getElementById('markdownPrintDate').textContent='Report date: '+formatDate(date);
+  document.getElementById('markdownListTable').innerHTML=renderSmall(getMarkdownItems(date));
+}
+
+function renderInventory() {
+  const q=(document.getElementById('search')?.value||'').toLowerCase().trim();
+  const f=document.getElementById('statusFilter')?.value||'all';
+  let arr=batches.filter(b=>{
+    const text=[b.barcode,b.variant,b.brand,b.description,b.department].join(' ').toLowerCase();
+    if(q && !text.includes(q)) return false;
+    if(f==='active' && b.pulled) return false;
+    if(f==='marked' && !b.markedDown) return false;
+    if(f==='unmarked' && b.markedDown) return false;
+    if(f==='pulled' && !b.pulled) return false;
+    return true;
+  }).sort((a,b)=>a.expiry.localeCompare(b.expiry));
+  document.getElementById('inventoryTable').innerHTML=renderSmall(arr);
+}
+
+function renderAudit() {
+  const date = getDate('workDate');
+  const weekday = parseDate(date).getDay();
+  const statusEl = document.getElementById('auditStatus');
+  statusEl.innerHTML = (weekday === 2 || weekday === 6)
+    ? `<div class="warn">📋 Today (${formatDate(date)}) is a scheduled audit day.</div>`
+    : '';
+
+  const since = addDays(date, -7);
+  const activity = batches
+    .filter(b => (b.markedDown && b.markdownDate && b.markdownDate >= since) || (b.pulled && b.pulledDate && b.pulledDate >= since))
+    .map(b => ({ b, actionDate: [b.markdownDate, b.pulledDate].filter(Boolean).sort().pop() }))
+    .sort((x,y)=> (y.actionDate||'').localeCompare(x.actionDate||''));
+
+  if (!activity.length) {
+    document.getElementById('auditTable').innerHTML = '<div class="empty">No pull/markdown activity in the last 7 days.</div>';
+    return;
+  }
+  document.getElementById('auditTable').innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Description</th><th>Dept</th><th>Expiry</th><th>Qty</th><th>Marked Down</th><th>Pulled</th></tr></thead>
+    <tbody>${activity.map(({b}) => `<tr>
+      <td>${esc(b.description)}<br><span class="muted">${esc(b.brand)}${b.barcode ? ' · ' + esc(b.barcode) : ''}</span></td>
+      <td>${esc(b.department)}</td>
+      <td>${formatDate(b.expiry)}</td>
+      <td>${b.quantity}</td>
+      <td>${b.markedDown ? formatDate(b.markdownDate) : '—'}</td>
+      <td>${b.pulled ? formatDate(b.pulledDate) : '—'}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+function setMarkdown(id, checked) {
+  const b=batches.find(x=>x.id===id); if(!b) return;
+  b.markedDown = checked;
+  b.markdownDate = checked ? getDate('workDate') : null;
+  save(); refreshAll();
+}
+
+function setPulled(id, checked) {
+  const b=batches.find(x=>x.id===id); if(!b) return;
+  b.pulled = checked;
+  b.pulledDate = checked ? getDate('workDate') : null;
+  save(); refreshAll();
+}
+
+function setQuantity(id, val) {
+  const b=batches.find(x=>x.id===id); if(!b) return;
+  const n = Number(val);
+  if (!Number.isFinite(n) || n < 0) { alert('Enter a valid number.'); renderInventory(); return; }
+  b.quantity = n;
+  save(); refreshAll();
+}
+
+function openDashboardList(type) {
+  if (type === 'pull') {
+    document.querySelector('[data-tab="expiryList"]').click();
+    document.getElementById('expiryListDate').value = getDate('workDate');
+    renderExpiryList();
+  } else {
+    document.querySelector('[data-tab="markdownList"]').click();
+    document.getElementById('markdownListDate').value = getDate('workDate');
+    renderMarkdownList();
+  }
+}
+
+function clearReceive() {
+  document.getElementById('receiveForm').reset();
+  document.getElementById('quantity').value=1;
+  document.getElementById('gs1Notice').style.display='none';
+  editingId = null;
+  document.getElementById('saveBtn').textContent='Save Batch';
+  document.getElementById('cancelEditBtn').style.display='none';
+  document.getElementById('variant').focus();
+}
+
+function editBatch(id) {
+  const b = batches.find(x=>x.id===id); if(!b) return;
+  editingId = id;
+  document.getElementById('variant').value = b.variant;
+  document.getElementById('barcode').value = b.barcode;
+  document.getElementById('brand').value = b.brand;
+  document.getElementById('description').value = b.description;
+  document.getElementById('expiry').value = b.expiry;
+  document.getElementById('quantity').value = b.quantity;
+  document.getElementById('department').value = b.department;
+  document.getElementById('saveBtn').textContent = 'Update Batch';
+  document.getElementById('cancelEditBtn').style.display = 'inline-block';
+  document.getElementById('variant').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function cancelEdit() {
+  clearReceive();
+}
+
+function deleteBatch(id) {
+  const b = batches.find(x=>x.id===id); if(!b) return;
+  if (!confirm(`Delete this batch?\n${b.description} (${b.variant||b.barcode}) — expiry ${formatDate(b.expiry)}, qty ${b.quantity}`)) return;
+  batches = batches.filter(x=>x.id!==id);
+  if (editingId === id) cancelEdit();
+  save(); refreshAll();
+}
+
+function renderRecentReceived() {
+  const today = localDateString();
+  const items = batches.filter(b => b.receivedDate === today).slice().reverse();
+  const el = document.getElementById('recentReceivedTable');
+  if (!items.length) { el.innerHTML = '<div class="empty">No batches received yet today.</div>'; return; }
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>A Code</th><th>Brand</th><th>Description</th><th>Dept</th><th>Expiry</th><th>Qty</th><th></th></tr></thead>
+    <tbody>${items.map(b => `<tr>
+      <td>${esc(b.variant || b.barcode)}</td>
+      <td>${esc(b.brand)}</td>
+      <td>${esc(b.description)}</td>
+      <td>${esc(b.department)}</td>
+      <td>${formatDate(b.expiry)}</td>
+      <td>${b.quantity}</td>
+      <td style="white-space:nowrap;">
+        <button class="secondary small" type="button" onclick="editBatch('${b.id}')">Edit</button>
+        <button class="danger small" type="button" onclick="deleteBatch('${b.id}')">Delete</button>
+      </td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+// Best-effort GS1-128 parser: looks for AI (01) GTIN-14, (17) expiry YYMMDD, (30)/(37) quantity.
+// These are the fixed-length AIs most likely to survive a plain scanner-as-keyboard input.
+// Treat this as a starting point to tune once you test it against your actual scanned strings —
+// variable-length AIs (like lot numbers) use a separator character scanners handle inconsistently.
+function tryParseGS1(raw) {
+  const s = raw.replace(/[^0-9]/g, '');
+  const out = {};
+  let m;
+  if (m = s.match(/01(\d{14})/)) out.gtin = m[1];
+  if (m = s.match(/17(\d{6})/)) {
+    const yy = m[1].slice(0,2), mm = m[1].slice(2,4), dd = m[1].slice(4,6);
+    out.expiry = `20${yy}-${mm}-${dd}`;
+  }
+  if (m = s.match(/30(\d{1,8})/)) out.qty = Number(m[1]);
+  return Object.keys(out).length ? out : null;
+}
+
+document.getElementById('barcode').addEventListener('change', e=>{
+  const parsed = tryParseGS1(e.target.value);
+  const notice = document.getElementById('gs1Notice');
+  if (parsed) {
+    if (parsed.gtin) document.getElementById('barcode').value = parsed.gtin;
+    if (parsed.expiry) document.getElementById('expiry').value = parsed.expiry;
+    if (parsed.qty) document.getElementById('quantity').value = parsed.qty;
+    notice.style.display='block';
+    notice.textContent = 'Detected a GS1 barcode — expiry/quantity auto-filled. Please confirm before saving.';
+  } else {
+    notice.style.display='none';
+  }
+});
+
+document.getElementById('receiveForm').addEventListener('submit', e=>{
+  e.preventDefault();
+  const data = {
+    barcode:document.getElementById('barcode').value.trim(),
+    variant:document.getElementById('variant').value.trim(),
+    brand:document.getElementById('brand').value.trim(),
+    description:document.getElementById('description').value.trim(),
+    expiry:document.getElementById('expiry').value,
+    quantity:Number(document.getElementById('quantity').value),
+    department:document.getElementById('department').value,
+  };
+  if (editingId) {
+    const b = batches.find(x=>x.id===editingId);
+    if (b) Object.assign(b, data);
+  } else {
+    batches.push({
+      id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()),
+      ...data,
+      markedDown:false,
+      markdownDate:null,
+      pulled:false,
+      pulledDate:null,
+      receivedDate:localDateString()
+    });
+  }
+  save();
+  clearReceive();
+  refreshAll();
+});
+
+function printExpiryList(){ renderExpiryList(); window.print(); }
+function printMarkdownList(){ renderMarkdownList(); window.print(); }
+
+function exportCSV() {
+  const cols = ['id','barcode','variant','brand','description','department','expiry','quantity','markedDown','markdownDate','pulled','pulledDate','receivedDate'];
+  const rows = [cols.join(',')].concat(batches.map(b => cols.map(c => {
+    const v = b[c] ?? '';
+    const s = String(v).replace(/"/g,'""');
+    return /[,"\n]/.test(s) ? `"${s}"` : s;
+  }).join(',')));
+  const blob = new Blob([rows.join('\n')], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `expiry-batches-${localDateString()}.csv`;
+  a.click();
+}
+
+function importCSV(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const text = reader.result;
+    const lines = text.split(/\r?\n/).filter(l=>l.length);
+    const cols = lines[0].split(',');
+    const imported = lines.slice(1).map(line => {
+      const vals = line.match(/(".*?"|[^,]+)(?=,|$)/g) || [];
+      const obj = {};
+      cols.forEach((c,i)=>{
+        let v = (vals[i]||'').replace(/^"|"$/g,'').replace(/""/g,'"');
+        if (c==='quantity') v = Number(v);
+        if (c==='markedDown' || c==='pulled') v = v === 'true';
+        obj[c]=v;
+      });
+      return obj;
+    });
+    if (!confirm(`Import ${imported.length} batches? This replaces all current data on this device.`)) return;
+    batches = imported;
+    save(); refreshAll();
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+document.querySelectorAll('.tabBtn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.tabBtn').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.tab).classList.add('active');
+    if(btn.dataset.tab==='dashboard') renderDashboard();
+    if(btn.dataset.tab==='receive') renderRecentReceived();
+    if(btn.dataset.tab==='expiryList') renderExpiryList();
+    if(btn.dataset.tab==='markdownList') renderMarkdownList();
+    if(btn.dataset.tab==='inventory') renderInventory();
+    if(btn.dataset.tab==='audit') renderAudit();
+  });
+});
+
+document.getElementById('workDate').value=localDateString();
+document.getElementById('expiryListDate').value=localDateString();
+document.getElementById('markdownListDate').value=localDateString();
+
+function addDemoData() {
+  if(batches.length) return;
+  const today=localDateString();
+  const mk=(days, barcode, brand, description, qty, dept, marked=false)=>{
+    batches.push({
+      id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()),
+      barcode, variant:barcode, brand, description,
+      expiry:addDays(today,days), quantity:qty, department:dept,
+      markedDown:marked, markdownDate:marked?today:null,
+      pulled:false, pulledDate:null, receivedDate:today
+    });
+  };
+  mk(0,'647624','McR','Heavy Cream 40%',2,'Dairy',true);
+  mk(3,'47783-2','HEF','Sheep Milk 1L Whole',2,'Dairy',false);
+  mk(2,'19217-1','HMY','Milk Chocolate Bottle',2,'Dairy',false);
+  mk(3,'64231','HPL','Beef Flank Steak',4,'Butcher Shoppe Meat',false);
+  mk(0,'64226','HPL','Beef Stew 1LB',3,'Butcher Shoppe Meat',true);
+  mk(4,'64228','HPL','Ground Beef Medium',6,'Butcher Shoppe Meat',false);
+  mk(1,'63987','LOf','King Caesar',3,'Salads',false);
+  mk(5,'33965','WLW','Chevrai Logs Plain',3,'Cheese',false);
+  mk(2,'30294','SGC','Kefir Plain 900g',1,'Kefir',false);
+  mk(6,'A0016225','VTG','Eggs Large Free Run 12pk',6,'Eggs',false);
+  save();
+}
+addDemoData();
+refreshAll();
+</script>
+</body>
+</html>
