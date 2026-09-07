@@ -71,6 +71,7 @@
   <button class="tabBtn" data-tab="audit">Supervisor Audit</button>
   <button class="tabBtn" data-tab="inventory">All Items</button>
 </nav>
+<div class="no-print" id="syncStatus" style="padding:6px 24px; font-size:12px; color:var(--muted); background:#fff; border-bottom:1px solid var(--border);">Connecting…</div>
 
 <main>
 <section id="dashboard" class="tab active">
@@ -87,8 +88,8 @@
   </div>
 
   <div class="cards">
-    <button class="card cardButton" onclick="openDashboardList('pull')"><div class="muted">🔴 Items Expiring Today</div><div class="number red" id="countPull">0</div></button>
-    <button class="card cardButton" onclick="openDashboardList('markdown')"><div class="muted">🟠 Markdowns due today</div><div class="number orange" id="countMarkdown">0</div></button>
+    <button class="card cardButton" onclick="openDashboardList('pull')"><div class="muted">🔴 Pull today (incl. overdue)</div><div class="number red" id="countPull">0</div></button>
+    <button class="card cardButton" onclick="openDashboardList('markdown')"><div class="muted">🟠 Markdown due today</div><div class="number orange" id="countMarkdown">0</div></button>
   </div>
 
   <div id="auditBanner"></div>
@@ -211,6 +212,14 @@
     <h2>Recent Pull/Markdown Activity</h2>
     <div id="auditTable"></div>
   </div>
+  <div class="panel">
+    <h2>🧹 Storage Cleanup</h2>
+    <p class="muted">Items that expired more than 4 months ago are safe to permanently remove — this doesn't affect anything currently on shelves. Keeps the free database from filling up while still leaving plenty of history for reference.</p>
+    <p id="cleanupCount"></p>
+    <div class="actions">
+      <button class="danger" onclick="deleteStaleBatches()">Delete batches older than 4 months</button>
+    </div>
+  </div>
 </section>
 
 <section id="inventory" class="tab">
@@ -240,10 +249,48 @@
 </section>
 </main>
 
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+  import {
+    initializeFirestore,
+    persistentLocalCache,
+    persistentMultipleTabManager,
+    collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
+  } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDJCUrtODj70TAzHxtJKM00YaS18f9qMBA",
+    authDomain: "expiry-tracker-112f7.firebaseapp.com",
+    projectId: "expiry-tracker-112f7",
+    storageBucket: "expiry-tracker-112f7.firebasestorage.app",
+    messagingSenderId: "969302335591",
+    appId: "1:969302335591:web:183fd8a73a7c4f526b34c2"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  });
+
+  // Sign in anonymously (no login screen, invisible to the user) so Firestore
+  // rules can require request.auth != null instead of being wide open to anyone
+  // who has the config values.
+  signInAnonymously(auth).then(() => {
+    // Expose to the classic script below (module scripts don't share global scope).
+    window.__fb = { db, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot };
+    window.dispatchEvent(new Event('firebase-ready'));
+  }).catch(err => {
+    console.error('Firebase anonymous sign-in failed', err);
+    window.dispatchEvent(new CustomEvent('firebase-auth-error', { detail: err }));
+  });
+</script>
+
 <script>
-const STORAGE_KEY = 'expiryManagerBatchesV2';
-let batches = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let batches = [];
 let editingId = null;
+let hasCheckedSeed = false;
 
 // Departments that the 30%-at-3-days-out markdown rule applies to,
 // per the store's "Bi-Daily (3 Days-Out) Markdown Schedule" sheet.
@@ -262,7 +309,52 @@ function formatDate(s) {
   if (!s) return '';
   return parseDate(s).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
 }
-function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(batches)); }
+
+// --- Firestore-backed storage ---
+// Every device/browser that opens this page shares the same 'batches' collection,
+// so changes here show up everywhere within a second or two.
+function addBatchRemote(data) {
+  const { db, collection, doc, setDoc } = window.__fb;
+  const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random());
+  return setDoc(doc(collection(db,'batches'), id), data)
+    .catch(err => alert('Could not save to the shared database: ' + err.message));
+}
+function updateBatchRemote(id, data) {
+  const { db, doc, updateDoc } = window.__fb;
+  return updateDoc(doc(db,'batches', id), data)
+    .catch(err => alert('Could not save the change: ' + err.message));
+}
+function deleteBatchRemote(id) {
+  const { db, doc, deleteDoc } = window.__fb;
+  return deleteDoc(doc(db,'batches', id))
+    .catch(err => alert('Could not delete: ' + err.message));
+}
+
+function initFirebaseSync() {
+  const { db, collection, onSnapshot } = window.__fb;
+  const statusEl = document.getElementById('syncStatus');
+  onSnapshot(collection(db,'batches'), snapshot => {
+    batches = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (!hasCheckedSeed) {
+      hasCheckedSeed = true;
+      if (snapshot.empty) { addDemoData(); return; }
+    }
+    statusEl.textContent = '🟢 Synced — shared across every device open on this app';
+    refreshAll();
+  }, err => {
+    console.error('Firestore sync error', err);
+    statusEl.textContent = '🔴 Sync error — check the browser console and your Firestore setup. Working from local cache only.';
+  });
+}
+
+if (window.__fb) initFirebaseSync();
+else window.addEventListener('firebase-ready', initFirebaseSync);
+
+window.addEventListener('firebase-auth-error', () => {
+  const statusEl = document.getElementById('syncStatus');
+  if (statusEl) statusEl.textContent = '🔴 Sign-in failed — enable "Anonymous" under Authentication → Sign-in method in the Firebase console.';
+});
+
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 }
@@ -282,7 +374,7 @@ function rowTable(items) {
       <td>${esc(b.description)}${b.barcode ? `<br><span class="muted">${esc(b.barcode)}</span>` : ''}</td>
       <td>${esc(b.department)}${MARKDOWN_DEPARTMENTS.has(b.department) ? '' : '<br><span class="muted">not markdown-eligible</span>'}</td>
       <td>${formatDate(b.expiry)}</td>
-      <td><input type="number" min="0" class="qtyInput" value="${b.quantity}" onchange="setQuantity('${b.id}', this.value)" style="width:64px;padding:6px;"></td>
+      <td>${b.quantity}</td>
       <td class="checkCell">
         <input type="checkbox" class="statusCheck" ${b.markedDown ? 'checked' : ''} onchange="setMarkdown('${b.id}', this.checked)" title="Checked = marked down 30%">
       </td>
@@ -384,6 +476,8 @@ function renderAudit() {
     .map(b => ({ b, actionDate: [b.markdownDate, b.pulledDate].filter(Boolean).sort().pop() }))
     .sort((x,y)=> (y.actionDate||'').localeCompare(x.actionDate||''));
 
+  renderCleanupCount(date);
+
   if (!activity.length) {
     document.getElementById('auditTable').innerHTML = '<div class="empty">No pull/markdown activity in the last 7 days.</div>';
     return;
@@ -400,26 +494,39 @@ function renderAudit() {
     </tr>`).join('')}</tbody></table></div>`;
 }
 
+// A batch is stale once its expiry date is more than 4 months in the past —
+// by then it's long since been pulled/resolved, so it's safe to purge to keep
+// the free Firestore tier's 1GB limit from ever being a concern.
+function subtractMonths(dateStr, n) {
+  const d = parseDate(dateStr);
+  return localDateString(new Date(d.getFullYear(), d.getMonth()-n, d.getDate()));
+}
+function getStaleItems(date) {
+  const cutoff = subtractMonths(date, 4);
+  return batches.filter(b => b.expiry < cutoff);
+}
+function renderCleanupCount(date) {
+  const stale = getStaleItems(date);
+  document.getElementById('cleanupCount').textContent = stale.length
+    ? `${stale.length} batch${stale.length===1?'':'es'} expired more than 4 months ago and can be cleaned up.`
+    : 'Nothing older than 4 months right now.';
+}
+function deleteStaleBatches() {
+  const date = getDate('workDate');
+  const stale = getStaleItems(date);
+  if (!stale.length) { alert('Nothing to clean up right now.'); return; }
+  if (!confirm(`Permanently delete ${stale.length} batch(es) expired more than 4 months ago? This can't be undone.`)) return;
+  stale.forEach(b => deleteBatchRemote(b.id));
+}
+
 function setMarkdown(id, checked) {
   const b=batches.find(x=>x.id===id); if(!b) return;
-  b.markedDown = checked;
-  b.markdownDate = checked ? getDate('workDate') : null;
-  save(); refreshAll();
+  updateBatchRemote(id, { markedDown: checked, markdownDate: checked ? getDate('workDate') : null });
 }
 
 function setPulled(id, checked) {
   const b=batches.find(x=>x.id===id); if(!b) return;
-  b.pulled = checked;
-  b.pulledDate = checked ? getDate('workDate') : null;
-  save(); refreshAll();
-}
-
-function setQuantity(id, val) {
-  const b=batches.find(x=>x.id===id); if(!b) return;
-  const n = Number(val);
-  if (!Number.isFinite(n) || n < 0) { alert('Enter a valid number.'); renderInventory(); return; }
-  b.quantity = n;
-  save(); refreshAll();
+  updateBatchRemote(id, { pulled: checked, pulledDate: checked ? getDate('workDate') : null });
 }
 
 function openDashboardList(type) {
@@ -466,9 +573,8 @@ function cancelEdit() {
 function deleteBatch(id) {
   const b = batches.find(x=>x.id===id); if(!b) return;
   if (!confirm(`Delete this batch?\n${b.description} (${b.variant||b.barcode}) — expiry ${formatDate(b.expiry)}, qty ${b.quantity}`)) return;
-  batches = batches.filter(x=>x.id!==id);
   if (editingId === id) cancelEdit();
-  save(); refreshAll();
+  deleteBatchRemote(id);
 }
 
 function renderRecentReceived() {
@@ -525,22 +631,21 @@ document.getElementById('barcode').addEventListener('change', e=>{
 
 document.getElementById('receiveForm').addEventListener('submit', e=>{
   e.preventDefault();
-  const data = {
+  const enteredQty = Number(document.getElementById('quantity').value);
+  const fields = {
     barcode:document.getElementById('barcode').value.trim(),
     variant:document.getElementById('variant').value.trim(),
     brand:document.getElementById('brand').value.trim(),
     description:document.getElementById('description').value.trim(),
     expiry:document.getElementById('expiry').value,
-    quantity:Number(document.getElementById('quantity').value),
     department:document.getElementById('department').value,
   };
   if (editingId) {
-    const b = batches.find(x=>x.id===editingId);
-    if (b) Object.assign(b, data);
+    updateBatchRemote(editingId, { ...fields, quantity: enteredQty });
   } else {
-    batches.push({
-      id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()),
-      ...data,
+    addBatchRemote({
+      ...fields,
+      quantity: enteredQty,
       markedDown:false,
       markdownDate:null,
       pulled:false,
@@ -548,9 +653,7 @@ document.getElementById('receiveForm').addEventListener('submit', e=>{
       receivedDate:localDateString()
     });
   }
-  save();
   clearReceive();
-  refreshAll();
 });
 
 function printExpiryList(){ renderExpiryList(); window.print(); }
@@ -589,9 +692,11 @@ function importCSV(event) {
       });
       return obj;
     });
-    if (!confirm(`Import ${imported.length} batches? This replaces all current data on this device.`)) return;
-    batches = imported;
-    save(); refreshAll();
+    if (!confirm(`Import ${imported.length} batches? These will be added to the shared database for everyone.`)) return;
+    imported.forEach(row => {
+      const { id, ...data } = row;
+      addBatchRemote(data);
+    });
   };
   reader.readAsText(file);
   event.target.value = '';
@@ -617,11 +722,9 @@ document.getElementById('expiryListDate').value=localDateString();
 document.getElementById('markdownListDate').value=localDateString();
 
 function addDemoData() {
-  if(batches.length) return;
   const today=localDateString();
   const mk=(days, barcode, brand, description, qty, dept, marked=false)=>{
-    batches.push({
-      id:crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()),
+    addBatchRemote({
       barcode, variant:barcode, brand, description,
       expiry:addDays(today,days), quantity:qty, department:dept,
       markedDown:marked, markdownDate:marked?today:null,
@@ -638,10 +741,7 @@ function addDemoData() {
   mk(5,'33965','WLW','Chevrai Logs Plain',3,'Cheese',false);
   mk(2,'30294','SGC','Kefir Plain 900g',1,'Kefir',false);
   mk(6,'A0016225','VTG','Eggs Large Free Run 12pk',6,'Eggs',false);
-  save();
 }
-addDemoData();
-refreshAll();
 </script>
 </body>
 </html>
