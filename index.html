@@ -88,7 +88,7 @@
   </div>
 
   <div class="cards">
-    <button class="card cardButton" onclick="openDashboardList('pull')"><div class="muted">🔴 Items Expiring Today </div><div class="number red" id="countPull">0</div></button>
+    <button class="card cardButton" onclick="openDashboardList('pull')"><div class="muted">🔴 Items Expiring Today</div><div class="number red" id="countPull">0</div></button>
     <button class="card cardButton" onclick="openDashboardList('markdown')"><div class="muted">🟠 Markdowns due today</div><div class="number orange" id="countMarkdown">0</div></button>
   </div>
 
@@ -256,7 +256,7 @@
     initializeFirestore,
     persistentLocalCache,
     persistentMultipleTabManager,
-    collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
+    collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -279,7 +279,7 @@
   // who has the config values.
   signInAnonymously(auth).then(() => {
     // Expose to the classic script below (module scripts don't share global scope).
-    window.__fb = { db, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot };
+    window.__fb = { db, collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot };
     window.dispatchEvent(new Event('firebase-ready'));
   }).catch(err => {
     console.error('Firebase anonymous sign-in failed', err);
@@ -290,7 +290,6 @@
 <script>
 let batches = [];
 let editingId = null;
-let hasCheckedSeed = false;
 
 // Departments that the 30%-at-3-days-out markdown rule applies to,
 // per the store's "Bi-Daily (3 Days-Out) Markdown Schedule" sheet.
@@ -330,15 +329,26 @@ function deleteBatchRemote(id) {
     .catch(err => alert('Could not delete: ' + err.message));
 }
 
-function initFirebaseSync() {
-  const { db, collection, onSnapshot } = window.__fb;
+async function initFirebaseSync() {
+  const { db, collection, doc, getDoc, setDoc, onSnapshot } = window.__fb;
   const statusEl = document.getElementById('syncStatus');
+
+  // Seed demo data only the very first time this database is ever used —
+  // tracked with a permanent marker doc, NOT by checking "is it empty right
+  // now" (that would re-seed every time someone deletes everything).
+  try {
+    const seedRef = doc(db, 'meta', 'seedInfo');
+    const seedSnap = await getDoc(seedRef);
+    if (!seedSnap.exists()) {
+      await setDoc(seedRef, { seeded: true, seededAt: localDateString() });
+      addDemoData();
+    }
+  } catch (err) {
+    console.error('Seed check failed', err);
+  }
+
   onSnapshot(collection(db,'batches'), snapshot => {
     batches = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (!hasCheckedSeed) {
-      hasCheckedSeed = true;
-      if (snapshot.empty) { addDemoData(); return; }
-    }
     statusEl.textContent = '🟢 Synced — shared across every device open on this app';
     refreshAll();
   }, err => {
@@ -459,7 +469,31 @@ function renderInventory() {
     if(f==='pulled' && !b.pulled) return false;
     return true;
   }).sort((a,b)=>a.expiry.localeCompare(b.expiry));
-  document.getElementById('inventoryTable').innerHTML=renderSmall(arr);
+  document.getElementById('inventoryTable').innerHTML=inventoryRowTable(arr);
+}
+
+function inventoryRowTable(items) {
+  if (!items.length) return '<div class="empty">Nothing to show.</div>';
+  return `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>A Code</th><th>Brand</th><th>Description</th><th>Expiry</th><th>Qty</th><th>Mk Dwn ✓</th><th>Mk Dwn on</th><th>Pulled ✓</th><th>Pulled on</th>
+    </tr></thead><tbody>
+    ${items.map(b => `<tr>
+      <td>${esc(b.variant || b.barcode)}</td>
+      <td>${esc(b.brand)}</td>
+      <td>${esc(b.description)}${b.barcode ? `<br><span class="muted">${esc(b.barcode)}</span>` : ''}</td>
+      <td>${formatDate(b.expiry)}</td>
+      <td>${b.quantity}</td>
+      <td class="checkCell">
+        <input type="checkbox" class="statusCheck" ${b.markedDown ? 'checked' : ''} onchange="setMarkdown('${b.id}', this.checked)" title="Checked = marked down 30%">
+      </td>
+      <td>${b.markedDown ? formatDate(b.markdownDate) : '—'}</td>
+      <td class="checkCell">
+        <input type="checkbox" class="statusCheck" ${b.pulled ? 'checked' : ''} onchange="setPulled('${b.id}', this.checked)" title="Checked = pulled from floor">
+      </td>
+      <td>${b.pulled ? formatDate(b.pulledDate) : '—'}</td>
+    </tr>`).join('')}
+    </tbody></table></div>`;
 }
 
 function renderAudit() {
